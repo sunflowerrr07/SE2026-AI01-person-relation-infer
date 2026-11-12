@@ -3,6 +3,8 @@
 
 项目规范见 [AGENTS.md](AGENTS.md)，分阶段计划见 [开发计划](docs/superpowers/plans/2026-11-12-development-plan.md)。
 
+M1 核心后端已按用户缩定范围封存，见 [验收记录](docs/m1-acceptance.md)。M2 已开始，Mock 和本地媒体运行方式见 [视觉流水线说明](ai_pipeline/README.md)。
+
 ## 本地 Python 环境
 
 项目使用 Python 3.12。Windows PowerShell 中：
@@ -28,11 +30,11 @@ SQLite 任务和审计记录默认位于 `data/`，可用 `APP_DATA_DIR` 调整�
 
 ## Neo4j 配置
 
-M1 将支持内存仓储和真实 Neo4j 仓储。内存模式仅供本地开发和单元测试，数据不持久化，也不验证 Neo4j 的 Cypher、约束或连接行为；上线或集成验证必须使用真实数据库，禁止故障时静默回退。
+M1 已提供内存仓储和真实 Neo4j 仓储适配器。内存模式仅供本地开发和单元测试，图数据不持久化，也不验证 Neo4j 的 Cypher、约束或连接行为；上线或集成验证必须使用真实数据库，禁止故障时静默回退。
 
 1. 本地：安装 [Neo4j Desktop](https://neo4j.com/download/)，创建并启动数据库，设置凭据。使用 `bolt://localhost:7687`，确认 Bolt 端口可达。
 2. 云端：在 [Neo4j Aura](https://neo4j.com/cloud/aura/) 创建可用免费实例，保存控制台提供的连接 URI、用户名和密码；使用加密 `neo4j+s://` URI。
-3. M1 实现时通过环境变量 `GRAPH_REPOSITORY=neo4j`、`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`、`NEO4J_DATABASE` 注入配置；内存模式显式设置 `GRAPH_REPOSITORY=memory`。不要提交凭据。启动后先验证连接，再运行真实数据库集成测试。这些变量是计划契约，当前尚无服务读取。
+3. 通过环境变量 `GRAPH_REPOSITORY=neo4j`、`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`、`NEO4J_DATABASE` 注入配置；内存模式显式设置 `GRAPH_REPOSITORY=memory`。不要提交凭据。配置入口在 Neo4j 模式启动时验证连接。真实数据库测试另用 `TEST_NEO4J_URI`、`TEST_NEO4J_USER`、`TEST_NEO4J_PASSWORD`、可选 `TEST_NEO4J_DATABASE` 配置，运行 `python -m pytest -m integration`。
 
 ## M2 时安装 AI 依赖
 

@@ -1,0 +1,2 @@
+# Lightweight decoding only; install AI weights/dependencies separately for real inference.
+opencv-python-headless>=4.10,<5
