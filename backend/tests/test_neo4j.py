@@ -27,8 +27,9 @@ def test_relation_requires_existing_distinct_nodes_and_supports_delete():
     driver.execute_query.return_value = ([], None, None)
     with pytest.raises(ValueError):
         repo.put_relation('T', 'P', 'Q', {})
-    driver.execute_query.return_value = ([{'relation': {'strength': 0.5}}], None, None)
+    driver.execute_query.return_value = ([{'relation': {'strength': 0.5}, 'source': 'P', 'target': 'Q'}], None, None)
     repo.put_relation('T', 'P', 'Q', {'strength': 0.5})
     assert repo.list_relations('T')[0]['strength'] == 0.5
+    assert repo.list_relations('T')[0]['source'] == 'P'
     repo.delete_relation('T', 'P', 'Q')
     assert 'DELETE' in driver.execute_query.call_args.args[0]

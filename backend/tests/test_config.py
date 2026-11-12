@@ -23,3 +23,13 @@ def test_server_factory_uses_environment(tmp_path, monkeypatch):
     monkeypatch.setenv('API_USER', 'alice')
     monkeypatch.setenv('GRAPH_REPOSITORY', 'memory')
     assert create_from_environment() is not None
+
+
+def test_neo4j_startup_initializes_query_indexes(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    driver = MagicMock()
+    monkeypatch.setattr('backend.app.config.GraphDatabase.driver', lambda *args, **kwargs: driver)
+    create_configured_app({'API_TOKEN': 'test-token', 'API_USER': 'alice', 'APP_DATA_DIR': str(tmp_path),
+                           'GRAPH_REPOSITORY': 'neo4j', 'NEO4J_URI': 'bolt://localhost:7687',
+                           'NEO4J_USER': 'neo4j', 'NEO4J_PASSWORD': 'test-password'})
+    assert any('CONSTRAINT' in str(call.args[0]) for call in driver.execute_query.call_args_list)

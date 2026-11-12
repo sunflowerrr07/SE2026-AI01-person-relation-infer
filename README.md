@@ -3,7 +3,9 @@
 
 项目规范见 [AGENTS.md](AGENTS.md)，分阶段计划见 [开发计划](docs/superpowers/plans/2026-11-12-development-plan.md)。
 
-M1 核心后端已按用户缩定范围封存，见 [验收记录](docs/m1-acceptance.md)。M2 已开始，Mock 和本地媒体运行方式见 [视觉流水线说明](ai_pipeline/README.md)。
+M1 核心后端已按用户缩定范围封存，见 [验收记录](docs/m1-acceptance.md)。M2 的 Mock 和本地媒体运行方式见 [视觉流水线说明](ai_pipeline/README.md)。
+
+M2 本地实验范围已验收。M3 的 PyG 推理、M2 数据衔接和多跳查询使用方式见 [M3 实现说明](docs/m3-implementation.md)。当前测试环境安装 CPU 版 PyTorch；后续启用 GPU 时须切换到与 torchvision 一致的 CUDA wheel。
 
 ## 本地 Python 环境
 

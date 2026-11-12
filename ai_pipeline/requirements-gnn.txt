@@ -1,0 +1,3 @@
+# Install torch CPU or CUDA wheel separately as documented before this file.
+torch==2.6.0
+torch-geometric==2.6.1

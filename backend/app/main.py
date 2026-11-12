@@ -2,10 +2,10 @@ import hmac
 import sqlite3
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from neo4j.exceptions import ServiceUnavailable, SessionExpired
+from neo4j.exceptions import ServiceUnavailable, SessionExpired, Neo4jError
 
 from .audit import PersistentAuditLog
 
@@ -47,6 +47,11 @@ def create_app(*, repository, audit_path, task_path, tokens):
     @app.exception_handler(SessionExpired)
     async def handle_database_unavailable(request, exc):
         return JSONResponse(status_code=503, content=envelope(request, None, 50301))
+
+    @app.exception_handler(Neo4jError)
+    async def handle_database_error(request, exc):
+        status = 504 if 'TransactionTimedOut' in (exc.code or '') else 503
+        return JSONResponse(status_code=status, content=envelope(request, None, status * 100 + 1))
 
     def principal(request: Request, authorization: str = Header(default='')):
         prefix = 'Bearer '
@@ -119,6 +124,15 @@ def create_app(*, repository, audit_path, task_path, tokens):
     def persons(task_id: str, request: Request, user=Depends(principal)):
         graph_access(task_id, user)
         return envelope(request, repository.list_persons(task_id))
+
+    @app.get('/api/v1/graph/persons/{person_id}/neighbors')
+    def neighbors(person_id: str, task_id: str, request: Request, max_hops: int = Query(2, ge=1, le=4), limit: int = Query(100, ge=1, le=1000), user=Depends(principal)):
+        graph_access(task_id, user)
+        try:
+            result = repository.neighbors(task_id, person_id, max_hops, limit)
+        except KeyError:
+            raise HTTPException(404)
+        return envelope(request, result)
 
     @app.delete('/api/v1/graph/persons/{person_id}')
     def delete_person(person_id: str, task_id: str, request: Request, user=Depends(principal)):

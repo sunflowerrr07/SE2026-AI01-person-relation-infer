@@ -1,5 +1,7 @@
 # M2 视觉感知与时空共现
 
+M3 已新增 PyG GNN 推理与多跳查询接口，安装、输入约定和完整示例见 [M3 实现说明](../docs/m3-implementation.md)。
+
 本轮交付本地媒体读取、Mock 轨迹、YOLOv8 + ByteTrack 适配器和共现强度计算。Mock 无需训练、GPU 或模型权重；OpenCV 负责解码本地文件。真实 YOLO 模式尚未在本机运行验证，跨镜头 ReID、算法评测和后端任务接入属于后续 M2 工作。
 
 ## 快速运行

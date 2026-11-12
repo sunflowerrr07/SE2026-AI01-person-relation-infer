@@ -24,6 +24,7 @@ def create_configured_app(environ):
         driver = GraphDatabase.driver(uri, auth=(username, password))
         driver.verify_connectivity()
         repository = Neo4jRepository(driver, environ.get('NEO4J_DATABASE', 'neo4j'))
+        repository.ensure_schema()
     else:
         raise ValueError('unknown graph repository')
     directory = Path(environ.get('APP_DATA_DIR', 'data'))

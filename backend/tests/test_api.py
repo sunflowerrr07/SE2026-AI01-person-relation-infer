@@ -47,3 +47,40 @@ def test_database_failure_is_not_an_empty_graph(tmp_path):
         response = client.get('/api/v1/graph/persons', headers=auth, params={'task_id': task})
         assert response.status_code == 503
         assert response.json()['code'] == 50301
+
+
+def test_multihop_endpoint_enforces_ownership_bounds_and_latency(tmp_path):
+    repo = InMemoryGraphRepository()
+    app = create_app(repository=repo, audit_path=tmp_path / 'a.db', task_path=tmp_path / 't.db', tokens={'a': ('alice', 'analyst'), 'b': ('bob', 'analyst')})
+    with TestClient(app) as client:
+        auth = {'Authorization': 'Bearer a'}
+        task = client.post('/api/v1/tasks/analyze', headers=auth, json={'media_id': 'M'}).json()['data']['task_id']
+        for person in ('A', 'B', 'C'):
+            repo.put_person(task, person, {})
+        repo.put_relation(task, 'A', 'B', {})
+        repo.put_relation(task, 'B', 'C', {})
+        url = '/api/v1/graph/persons/A/neighbors'
+        start = perf_counter()
+        response = client.get(url, headers=auth, params={'task_id': task, 'max_hops': 2})
+        assert response.status_code == 200
+        assert perf_counter() - start < 1
+        assert response.json()['data'] == [{'person_id': 'B', 'hops': 1}, {'person_id': 'C', 'hops': 2}]
+        assert client.get(url, headers={'Authorization': 'Bearer b'}, params={'task_id': task}).status_code == 403
+        assert client.get(url, headers=auth, params={'task_id': task, 'max_hops': 5}).status_code == 422
+        assert client.get('/api/v1/graph/persons/missing/neighbors', headers=auth, params={'task_id': task}).status_code == 404
+
+
+def test_database_query_timeout_returns_explicit_504(tmp_path):
+    from neo4j.exceptions import TransientError
+    class TimedOut(TransientError):
+        code = 'Neo.TransientError.Transaction.TransactionTimedOut'
+    class SlowRepository(InMemoryGraphRepository):
+        def neighbors(self, *args):
+            raise TimedOut('time limit exceeded')
+    app = create_app(repository=SlowRepository(), audit_path=tmp_path / 'a.db', task_path=tmp_path / 't.db', tokens={'a': ('alice', 'analyst')})
+    with TestClient(app) as client:
+        auth = {'Authorization': 'Bearer a'}
+        task = client.post('/api/v1/tasks/analyze', headers=auth, json={'media_id': 'M'}).json()['data']['task_id']
+        response = client.get('/api/v1/graph/persons/A/neighbors', headers=auth, params={'task_id': task})
+        assert response.status_code == 504
+        assert response.json()['code'] == 50401
