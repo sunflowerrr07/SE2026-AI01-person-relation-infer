@@ -7,6 +7,8 @@ M1 核心后端已按用户缩定范围封存，见 [验收记录](docs/m1-accep
 
 M2 本地实验范围已验收。M3 的 PyG 推理、M2 数据衔接和多跳查询使用方式见 [M3 实现说明](docs/m3-implementation.md)。当前测试环境安装 CPU 版 PyTorch；后续启用 GPU 时须切换到与 torchvision 一致的 CUDA wheel。
 
+M4 前端与本地演示链路已接通，验证范围和剩余事项见 [项目验收记录](docs/final-acceptance.md)。
+
 ## 本地 Python 环境
 
 项目使用 Python 3.12。Windows PowerShell 中：
@@ -29,6 +31,22 @@ python -m uvicorn backend.app.config:create_from_environment --factory
 ```
 
 SQLite 任务和审计记录默认位于 `data/`，可用 `APP_DATA_DIR` 调整。此开发配置尚不具备完整用户管理、媒体授权和生产安全控制，不可用于真实敏感数据。内存图谱在进程重启后丢失。
+
+## 前端与演示
+
+先按上面的方式启动后端，并安装 `requirements.txt`、`ai_pipeline/requirements.txt` 和 `ai_pipeline/requirements-gnn.txt`；CPU 版 PyTorch 的安装顺序见 M3 说明。要在同一个开发令牌下浏览审计，可设置 `API_ROLE=admin`（仅用于本地演示）。另开 PowerShell：
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+访问终端打印的 `http://127.0.0.1:5173/`，输入后端的令牌。选择授权的 PNG/JPG 或 MP4/AVI/MOV（最多 16 MB），勾选授权声明后运行演示。Vite 将 `/api` 代理到 `127.0.0.1:8000`；FastAPI 也允许本地 5173 跨域。令牌仅保存在当前页面内存，刷新后需重新输入。
+
+任务页面显示进度，图谱页可点击节点查询 1–4 跳关联，隐私页由管理员或审计令牌查看访问记录。上传文件保存在 `APP_DATA_DIR/media/`，当前不提供自动清理或生产级授权证明管理；演示结束后应按数据管理要求处理。任务和审计存 SQLite，默认内存图谱重启即清空。
+
+联调验证：启动两个服务后，在项目根目录设置 `SMOKE_API_TOKEN` 为有管理员权限的本地令牌，执行 `.\.venv\Scripts\python.exe frontend/scripts/smoke.py`。前端测试与构建：`cd frontend; npm test; npm run build`。
 
 ## Neo4j 配置
 

@@ -1,9 +1,12 @@
 import hmac
+import json
 import sqlite3
 from uuid import uuid4
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, Query, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from neo4j.exceptions import ServiceUnavailable, SessionExpired, Neo4jError
 
@@ -21,9 +24,15 @@ class GraphInput(BaseModel):
 
 def create_app(*, repository, audit_path, task_path, tokens):
     app = FastAPI()
+    app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allow_headers=['Authorization', 'Content-Type'])
     audit = PersistentAuditLog(audit_path)
     with sqlite3.connect(task_path) as db:
         db.execute('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, media_id TEXT NOT NULL, status TEXT NOT NULL)')
+        columns = {row[1] for row in db.execute('PRAGMA table_info(tasks)')}
+        for name, definition in [('progress', 'INTEGER NOT NULL DEFAULT 0'), ('result', 'TEXT'), ('error', 'TEXT')]:
+            if name not in columns:
+                db.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
+        db.execute('CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, owner TEXT NOT NULL, path TEXT NOT NULL)')
 
     def envelope(request, data, code=0):
         return {'request_id': request.state.request_id, 'code': code, 'data': data}
@@ -68,12 +77,12 @@ def create_app(*, repository, audit_path, task_path, tokens):
 
     def task_row(task_id, user):
         with sqlite3.connect(task_path) as db:
-            row = db.execute('SELECT id, owner, media_id, status FROM tasks WHERE id = ?', (task_id,)).fetchone()
+            row = db.execute('SELECT id, owner, media_id, status, progress, error FROM tasks WHERE id = ?', (task_id,)).fetchone()
         if not row:
             raise HTTPException(404)
         if row[1] != user[0] and user[1] != 'admin':
             raise HTTPException(403)
-        return dict(zip(('task_id', 'owner', 'media_id', 'status'), row))
+        return dict(zip(('task_id', 'owner', 'media_id', 'status', 'progress', 'error'), row))
 
     @app.get('/health')
     def health(request: Request):
@@ -84,8 +93,51 @@ def create_app(*, repository, audit_path, task_path, tokens):
         role(user, {'analyst', 'admin'})
         task = uuid4().hex
         with sqlite3.connect(task_path) as db:
-            db.execute('INSERT INTO tasks VALUES (?, ?, ?, ?)', (task, user[0], body.media_id, 'queued'))
+            db.execute('INSERT INTO tasks (id, owner, media_id, status) VALUES (?, ?, ?, ?)', (task, user[0], body.media_id, 'queued'))
         return envelope(request, task_row(task, user))
+
+    @app.get('/api/v1/tasks')
+    def list_tasks(request: Request, user=Depends(principal)):
+        role(user, {'analyst', 'admin'})
+        with sqlite3.connect(task_path) as db:
+            if user[1] == 'admin':
+                rows = db.execute('SELECT id FROM tasks ORDER BY rowid DESC LIMIT 100').fetchall()
+            else:
+                rows = db.execute('SELECT id FROM tasks WHERE owner = ? ORDER BY rowid DESC LIMIT 100', (user[0],)).fetchall()
+        return envelope(request, [task_row(row[0], user) for row in rows])
+
+    @app.post('/api/v1/media', status_code=201)
+    async def upload_media(request: Request, file: UploadFile = File(...), authorized: bool = Form(...), user=Depends(principal)):
+        role(user, {'analyst', 'admin'})
+        if not authorized:
+            raise HTTPException(403)
+        extension = Path(file.filename or '').suffix.lower()
+        if extension not in {'.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov'}:
+            raise HTTPException(422)
+        content = await file.read(16 * 1024 * 1024 + 1)
+        if not content or len(content) > 16 * 1024 * 1024:
+            raise HTTPException(422)
+        import cv2
+        import numpy as np
+        if extension in {'.png', '.jpg', '.jpeg'} and cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR) is None:
+            raise HTTPException(422)
+        media_id = uuid4().hex
+        directory = Path(task_path).parent / 'media'
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / (media_id + extension)
+        destination.write_bytes(content)
+        if extension in {'.mp4', '.avi', '.mov'}:
+            capture = cv2.VideoCapture(str(destination))
+            try:
+                valid, _ = capture.read()
+            finally:
+                capture.release()
+            if not valid:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(422)
+        with sqlite3.connect(task_path) as db:
+            db.execute('INSERT INTO media VALUES (?, ?, ?)', (media_id, user[0], str(destination)))
+        return envelope(request, {'media_id': media_id})
 
     @app.get('/api/v1/tasks/{task_id}')
     def get_task(task_id: str, request: Request, user=Depends(principal)):
@@ -106,6 +158,59 @@ def create_app(*, repository, audit_path, task_path, tokens):
     @app.post('/api/v1/tasks/{task_id}/retry')
     def retry(task_id: str, request: Request, user=Depends(principal)):
         return envelope(request, transition(task_id, user, 'cancelled', 'queued'))
+
+    def run_demo(task_id, path):
+        try:
+            from ai_pipeline.run import run_pipeline
+            from ai_pipeline.gnn import RelationGNN
+            from ai_pipeline.gnn_run import infer_m2_report
+            import torch
+            with sqlite3.connect(task_path) as db:
+                db.execute('UPDATE tasks SET progress = 20 WHERE id = ?', (task_id,))
+            report = run_pipeline(path, mode='mock', window_seconds=1, max_frames=300)
+            with sqlite3.connect(task_path) as db:
+                db.execute('UPDATE tasks SET progress = 60 WHERE id = ?', (task_id,))
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(42)
+                model = RelationGNN(2)
+            result = infer_m2_report(model, report, {'mock-1': [1, 0], 'mock-2': [0, 1]})
+            for identifier in ('mock-1', 'mock-2'):
+                repository.put_person(task_id, identifier, {'version': 1})
+            for window in result['windows']:
+                for prediction in window['predictions']:
+                    repository.put_relation(task_id, prediction['source'], prediction['target'], {'strength': next(edge['strength'] for edge in report['relations'] if edge['window_start'] == window['window_start']), 'confidence': prediction['probability'], 'uncertain': True, 'model_version': prediction['model_version'], 'synthetic': True})
+            with sqlite3.connect(task_path) as db:
+                db.execute('UPDATE tasks SET status = ?, progress = 100, result = ?, error = NULL WHERE id = ?', ('succeeded', json.dumps(result), task_id))
+        except Exception:
+            for identifier in ('mock-1', 'mock-2'):
+                try:
+                    repository.delete_person(task_id, identifier)
+                except Exception:
+                    pass
+            with sqlite3.connect(task_path) as db:
+                db.execute('UPDATE tasks SET status = ?, error = ? WHERE id = ?', ('failed', '演示分析失败，请检查服务配置。', task_id))
+
+    @app.post('/api/v1/tasks/{task_id}/run-demo', status_code=202)
+    def start_demo(task_id: str, request: Request, background: BackgroundTasks, user=Depends(principal)):
+        task = task_row(task_id, user)
+        with sqlite3.connect(task_path) as db:
+            media = db.execute('SELECT path FROM media WHERE id = ? AND owner = ?', (task['media_id'], task['owner'])).fetchone()
+            if not media:
+                raise HTTPException(404)
+            changed = db.execute('UPDATE tasks SET status = ?, progress = 0 WHERE id = ? AND status = ?', ('running', task_id, 'queued'))
+            if changed.rowcount != 1:
+                raise HTTPException(409)
+        background.add_task(run_demo, task_id, media[0])
+        return envelope(request, task_row(task_id, user))
+
+    @app.get('/api/v1/tasks/{task_id}/result')
+    def task_result(task_id: str, request: Request, user=Depends(principal)):
+        task = task_row(task_id, user)
+        if task['status'] != 'succeeded':
+            raise HTTPException(409)
+        with sqlite3.connect(task_path) as db:
+            raw = db.execute('SELECT result FROM tasks WHERE id = ?', (task_id,)).fetchone()[0]
+        return envelope(request, json.loads(raw))
 
     def graph_access(task_id, user):
         role(user, {'analyst', 'admin'})
